@@ -8,5 +8,5 @@
 <p>Data and code coming soon.</p>
 <h2>Summary</h2>We propose a pipeline for the scalable generation of realistic 3D animal pose and shape estimation training data. Training solely on data produced using our pipeline, we achieve state-of-the-art performance on a real-world 3D pose and shape estimation benchmark.
 <div style="text-align:center">
-<img src="https://genzoo.is.tue.mpg.de/media/upload/teaser.jpg" style="width:80%">
+<img src="https://genzoo.is.tue.mpg.de/media/upload/teaser.jpg" style="width:100%">
 </div>
