@@ -21,8 +21,8 @@ class SMPLTransformerDecoderHead(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.joint_rep_type = cfg.MODEL.SMPL_HEAD.get('JOINT_REP', '6d')
-        self.joint_rep_dim = {'6d': 6, 'aa': 3}[self.joint_rep_type]
+        self.joint_rep_type = 'mat'
+        self.joint_rep_dim = 9
         npose = self.joint_rep_dim * (cfg.SMPL.NUM_BODY_JOINTS + 1)
         self.npose = npose
         self.input_is_mean_shape = cfg.MODEL.SMPL_HEAD.get('TRANSFORMER_INPUT', 'zero') == 'mean_shape'
@@ -37,7 +37,7 @@ class SMPLTransformerDecoderHead(nn.Module):
         )
         dim=transformer_args['dim']
         self.decpose = nn.Linear(dim, npose)
-        self.decshape = nn.Linear(dim, 10)
+        self.decshape = nn.Linear(dim, cfg.SMPL.NUM_BETAS)
         self.deccam = nn.Linear(dim, 3)
 
         if cfg.MODEL.SMPL_HEAD.get('INIT_DECODER_XAVIER', False):
@@ -45,11 +45,16 @@ class SMPLTransformerDecoderHead(nn.Module):
             nn.init.xavier_uniform_(self.decpose.weight, gain=0.01)
             nn.init.xavier_uniform_(self.decshape.weight, gain=0.01)
             nn.init.xavier_uniform_(self.deccam.weight, gain=0.01)
+        # mean_params_path = "/home/mambauser/.cache/4DHumans/data/smpl_mean_params.npz"
+        # mean_params = np.load(mean_params_path)#cfg.SMPL.MEAN_PARAMS)
+        # init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
+        # init_body_pose = torch.zeros(1, (cfg.SMPL.NUM_BODY_JOINTS + 1)*self.joint_rep_dim)
+        init_body_pose = torch.eye(3).unsqueeze(0).repeat(cfg.SMPL.NUM_BODY_JOINTS + 1, 1, 1).view(1, -1)
 
-        mean_params = np.load(cfg.SMPL.MEAN_PARAMS)
-        init_body_pose = torch.from_numpy(mean_params['pose'].astype(np.float32)).unsqueeze(0)
-        init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
-        init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
+        # init_betas = torch.from_numpy(mean_params['shape'].astype('float32')).unsqueeze(0)
+        init_betas = torch.zeros(1, cfg.SMPL.NUM_BETAS)
+        # init_cam = torch.from_numpy(mean_params['cam'].astype(np.float32)).unsqueeze(0)
+        init_cam = torch.tensor([0, 0, 0.5]).float().unsqueeze(0)
         self.register_buffer('init_body_pose', init_body_pose)
         self.register_buffer('init_betas', init_betas)
         self.register_buffer('init_cam', init_cam)
@@ -96,7 +101,8 @@ class SMPLTransformerDecoderHead(nn.Module):
         # Convert self.joint_rep_type -> rotmat
         joint_conversion_fn = {
             '6d': rot6d_to_rotmat,
-            'aa': lambda x: aa_to_rotmat(x.view(-1, 3).contiguous())
+            'aa': lambda x: aa_to_rotmat(x.view(-1, 3).contiguous()),
+            'mat': lambda x: x
         }[self.joint_rep_type]
 
         pred_smpl_params_list = {}

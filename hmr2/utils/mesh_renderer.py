@@ -8,6 +8,9 @@ import pyrender
 import trimesh
 import cv2
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import io
+from PIL import Image
 
 from .render_openpose import render_openpose
 
@@ -66,31 +69,68 @@ class MeshRenderer:
         rend_imgs = make_grid(rend_imgs, nrow=nrow, padding=padding)
         return rend_imgs
 
-    def visualize_tensorboard(self, vertices, camera_translation, images, pred_keypoints, gt_keypoints, focal_length=None, nrow=5, padding=2):
+    def visualize_tensorboard(self, vertices, gt_vertices, vertices_2d, vertices_2d_gt, images, pred_keypoints, gt_keypoints, nrow=7, padding=2):
         images_np = np.transpose(images, (0,2,3,1))
         rend_imgs = []
         pred_keypoints = np.concatenate((pred_keypoints, np.ones_like(pred_keypoints)[:, :, [0]]), axis=-1)
         pred_keypoints = self.img_res * (pred_keypoints + 0.5)
         gt_keypoints[:, :, :-1] = self.img_res * (gt_keypoints[:, :, :-1] + 0.5)
-        keypoint_matches = [(1, 12), (2, 8), (3, 7), (4, 6), (5, 9), (6, 10), (7, 11), (8, 14), (9, 2), (10, 1), (11, 0), (12, 3), (13, 4), (14, 5)]
+        # keypoint_matches = [(1, 12), (2, 8), (3, 7), (4, 6), (5, 9), (6, 10), (7, 11), (8, 14), (9, 2), (10, 1), (11, 0), (12, 3), (13, 4), (14, 5)]
         for i in range(vertices.shape[0]):
-            fl = self.focal_length
-            rend_img = torch.from_numpy(np.transpose(self.__call__(vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=False), (2,0,1))).float()
-            rend_img_side = torch.from_numpy(np.transpose(self.__call__(vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=True), (2,0,1))).float()
-            body_keypoints = pred_keypoints[i, :25]
-            extra_keypoints = pred_keypoints[i, -19:]
-            for pair in keypoint_matches:
-                body_keypoints[pair[0], :] = extra_keypoints[pair[1], :]
-            pred_keypoints_img = render_openpose(255 * images_np[i].copy(), body_keypoints) / 255
-            body_keypoints = gt_keypoints[i, :25]
-            extra_keypoints = gt_keypoints[i, -19:]
-            for pair in keypoint_matches:
-                if extra_keypoints[pair[1], -1] > 0 and body_keypoints[pair[0], -1] == 0:
-                    body_keypoints[pair[0], :] = extra_keypoints[pair[1], :]
-            gt_keypoints_img = render_openpose(255*images_np[i].copy(), body_keypoints) / 255
+            # fl = self.focal_length
+            # rend_img = torch.from_numpy(np.transpose(self.__call__(vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=False), (2,0,1))).float()
+            # rend_img_side = torch.from_numpy(np.transpose(self.__call__(vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=True), (2,0,1))).float()
+            # rend_img_gt = torch.from_numpy(np.transpose(self.__call__(gt_vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=False, baseColorFactor=(0.55, 0.95, 0.55, 1.0)), (2,0,1))).float()
+            # rend_img_side_gt = torch.from_numpy(np.transpose(self.__call__(gt_vertices[i], camera_translation[i], images_np[i], focal_length=fl, side_view=True, baseColorFactor=(0.55, 0.95, 0.55, 1.0)), (2,0,1))).float()
+            # instead, plot vertices_2d on image
+            
+            target_shape = images_np[i].shape
+            fig, ax = plt.subplots(1, 4, figsize=(16*4, 16))
+
+            images_np_255 = (255 * images_np[i]).astype(np.uint8)
+            ax[0].matshow(images_np_255)
+            ax[0].scatter(images_np[i].shape[1]/2 + images_np[i].shape[1]*vertices_2d[i, :, 0], images_np[i].shape[0]/2 + images_np[i].shape[0]*vertices_2d[i, :, 1], c=vertices_2d[i, :, 1])
+            ax[0].axis('off')
+
+            ax[1].matshow(images_np_255)
+            ax[1].scatter(images_np[i].shape[1]/2 + images_np[i].shape[1]*vertices_2d_gt[i, :, 0], images_np[i].shape[0]/2 + images_np[i].shape[0]*vertices_2d_gt[i, :, 1], c=vertices_2d_gt[i, :, 1])
+            ax[1].axis('off')
+
+            ax[2].scatter(vertices[i, :, 0], vertices[i, :, 2], c=vertices[i, :, 1])
+            ax[2].set_aspect('equal')
+            ax[2].axis('off')
+
+            ax[3].scatter(gt_vertices[i, :, 0], gt_vertices[i, :, 2], c=gt_vertices[i, :, 1])
+            ax[3].set_aspect('equal')
+            ax[3].axis('off')
+
+            target_h, target_w = target_shape[0], target_shape[1]
+
+            with io.BytesIO() as buf:
+                fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0, dpi='figure')
+                buf.seek(0)
+                img_arr = np.array(Image.open(buf).convert('RGB').resize((target_w*4, target_h), Image.Resampling.LANCZOS)) / 255
+            plt.close(fig)
+
+            img_arr_split = np.split(img_arr, 4, axis=1)
+            img_arr_split = [torch.from_numpy(np.transpose(img_arr_split[i], (2,0,1))) for i in range(4)]
+
+            # body_keypoints = pred_keypoints[i, :25]
+            # extra_keypoints = pred_keypoints[i, -19:]
+            # for pair in keypoint_matches:
+            #     body_keypoints[pair[0], :] = extra_keypoints[pair[1], :]
+            pred_keypoints_img = render_openpose(255 * images_np[i].copy(), pred_keypoints[i]) / 255
+            # body_keypoints = gt_keypoints[i, :25]
+            # extra_keypoints = gt_keypoints[i, -19:]
+            # for pair in keypoint_matches:
+            #     if extra_keypoints[pair[1], -1] > 0 and body_keypoints[pair[0], -1] == 0:
+            #         body_keypoints[pair[0], :] = extra_keypoints[pair[1], :]
+            gt_keypoints_img = render_openpose(255 * images_np[i].copy(), gt_keypoints[i]) / 255
             rend_imgs.append(torch.from_numpy(images[i]))
-            rend_imgs.append(rend_img)
-            rend_imgs.append(rend_img_side)
+            rend_imgs.append(img_arr_split[0])
+            rend_imgs.append(img_arr_split[1])
+            rend_imgs.append(img_arr_split[2])
+            rend_imgs.append(img_arr_split[3])
             rend_imgs.append(torch.from_numpy(pred_keypoints_img).permute(2,0,1))
             rend_imgs.append(torch.from_numpy(gt_keypoints_img).permute(2,0,1))
         rend_imgs = make_grid(rend_imgs, nrow=nrow, padding=padding)

@@ -13,7 +13,16 @@ from .discriminator import Discriminator
 from .losses import Keypoint3DLoss, Keypoint2DLoss, ParameterLoss
 from . import SMPL
 
+import smplx
+import wandb
+
 log = get_pylogger(__name__)
+
+def batched_weak_perspective_project(verts, scale, tx, ty):
+    proj = verts[:, :, :2] * scale[:, None, None]  # (B, N, 2)
+    proj[:, :, 0] += tx[:, None]
+    proj[:, :, 1] += ty[:, None]
+    return proj
 
 class HMR2(pl.LightningModule):
 
@@ -26,7 +35,7 @@ class HMR2(pl.LightningModule):
         super().__init__()
 
         # Save hyperparameters
-        self.save_hyperparameters(logger=False, ignore=['init_renderer'])
+        self.save_hyperparameters(logger=True, ignore=['init_renderer'])
 
         self.cfg = cfg
         # Create backbone feature extractor
@@ -80,11 +89,11 @@ class HMR2(pl.LightningModule):
         optimizer = torch.optim.AdamW(params=param_groups,
                                         # lr=self.cfg.TRAIN.LR,
                                         weight_decay=self.cfg.TRAIN.WEIGHT_DECAY)
-        optimizer_disc = torch.optim.AdamW(params=self.discriminator.parameters(),
-                                            lr=self.cfg.TRAIN.LR,
-                                            weight_decay=self.cfg.TRAIN.WEIGHT_DECAY)
+        # optimizer_disc = torch.optim.AdamW(params=self.discriminator.parameters(),
+        #                                     lr=self.cfg.TRAIN.LR,
+        #                                     weight_decay=self.cfg.TRAIN.WEIGHT_DECAY)
 
-        return optimizer, optimizer_disc
+        return optimizer #, optimizer_disc
 
     def forward_step(self, batch: Dict, train: bool = False) -> Dict:
         """
@@ -114,12 +123,6 @@ class HMR2(pl.LightningModule):
         # Compute camera translation
         device = pred_smpl_params['body_pose'].device
         dtype = pred_smpl_params['body_pose'].dtype
-        focal_length = self.cfg.EXTRA.FOCAL_LENGTH * torch.ones(batch_size, 2, device=device, dtype=dtype)
-        pred_cam_t = torch.stack([pred_cam[:, 1],
-                                  pred_cam[:, 2],
-                                  2*focal_length[:, 0]/(self.cfg.MODEL.IMAGE_SIZE * pred_cam[:, 0] +1e-9)],dim=-1)
-        output['pred_cam_t'] = pred_cam_t
-        output['focal_length'] = focal_length
 
         # Compute model vertices, joints and the projected joints
         pred_smpl_params['global_orient'] = pred_smpl_params['global_orient'].reshape(batch_size, -1, 3, 3)
@@ -130,13 +133,16 @@ class HMR2(pl.LightningModule):
         pred_vertices = smpl_output.vertices
         output['pred_keypoints_3d'] = pred_keypoints_3d.reshape(batch_size, -1, 3)
         output['pred_vertices'] = pred_vertices.reshape(batch_size, -1, 3)
-        pred_cam_t = pred_cam_t.reshape(-1, 3)
-        focal_length = focal_length.reshape(-1, 2)
-        pred_keypoints_2d = perspective_projection(pred_keypoints_3d,
-                                                   translation=pred_cam_t,
-                                                   focal_length=focal_length / self.cfg.MODEL.IMAGE_SIZE)
 
+        tx, ty, scale = pred_cam[:, 0], pred_cam[:, 1], pred_cam[:, 2]
+        output['tx'] = tx
+        output['ty'] = ty
+        output['scale'] = scale
+
+        pred_keypoints_2d = batched_weak_perspective_project(pred_keypoints_3d, scale, tx, ty)
         output['pred_keypoints_2d'] = pred_keypoints_2d.reshape(batch_size, -1, 2)
+        pred_vertices_2d = batched_weak_perspective_project(pred_vertices, scale, tx, ty)
+        output['pred_vertices_2d'] = pred_vertices_2d.reshape(batch_size, -1, 2)
         return output
 
     def compute_loss(self, batch: Dict, output: Dict, train: bool = True) -> torch.Tensor:
@@ -153,7 +159,8 @@ class HMR2(pl.LightningModule):
         pred_smpl_params = output['pred_smpl_params']
         pred_keypoints_2d = output['pred_keypoints_2d']
         pred_keypoints_3d = output['pred_keypoints_3d']
-
+        pred_vertices = output['pred_vertices']
+        pred_vertices_2d = output['pred_vertices_2d']
 
         batch_size = pred_smpl_params['body_pose'].shape[0]
         device = pred_smpl_params['body_pose'].device
@@ -162,30 +169,52 @@ class HMR2(pl.LightningModule):
         # Get annotations
         gt_keypoints_2d = batch['keypoints_2d']
         gt_keypoints_3d = batch['keypoints_3d']
+        gt_vertices = batch['vertices']
+        gt_vertices_2d = batch['vertices_2d']
         gt_smpl_params = batch['smpl_params']
         has_smpl_params = batch['has_smpl_params']
-        is_axis_angle = batch['smpl_params_is_axis_angle']
 
         # Compute 3D keypoint loss
-        loss_keypoints_2d = self.keypoint_2d_loss(pred_keypoints_2d, gt_keypoints_2d)
-        loss_keypoints_3d = self.keypoint_3d_loss(pred_keypoints_3d, gt_keypoints_3d, pelvis_id=25+14)
+        loss_keypoints_2d = self.keypoint_2d_loss(pred_keypoints_2d, gt_keypoints_2d) * self.cfg.LOSS_WEIGHTS['KEYPOINTS_2D']
+        loss_keypoints_3d = self.keypoint_3d_loss(pred_keypoints_3d, gt_keypoints_3d, pelvis_id=0) * self.cfg.LOSS_WEIGHTS['KEYPOINTS_3D']
+
+        # Compute vertex losses (2D and 3D)
+        loss_vertices_2d = torch.nn.functional.l1_loss(
+            pred_vertices_2d, gt_vertices_2d[..., :2]
+        ) * self.cfg.LOSS_WEIGHTS['VERTICES_2D']
+        loss_vertices_3d = torch.nn.functional.l1_loss(
+            pred_vertices, gt_vertices[..., :3]
+        ) * self.cfg.LOSS_WEIGHTS['VERTICES']
 
         # Compute loss on SMPL parameters
         loss_smpl_params = {}
         for k, pred in pred_smpl_params.items():
             gt = gt_smpl_params[k].view(batch_size, -1)
-            if is_axis_angle[k].all():
-                gt = aa_to_rotmat(gt.reshape(-1, 3)).view(batch_size, -1, 3, 3)
+            # if is_axis_angle[k].all():
+            #     gt = aa_to_rotmat(gt.reshape(-1, 3)).view(batch_size, -1, 3, 3)
             has_gt = has_smpl_params[k]
-            loss_smpl_params[k] = self.smpl_parameter_loss(pred.reshape(batch_size, -1), gt.reshape(batch_size, -1), has_gt)
+            # loss_smpl_params[k] = self.smpl_parameter_loss(pred.reshape(batch_size, -1), gt.reshape(batch_size, -1), has_gt)
+            if has_gt.any():
+                if k == 'betas':
+                    loss_smpl_params[k] = torch.nn.functional.l1_loss(self.smpl(betas=pred).vertices, self.smpl(betas=gt).vertices) * self.cfg.LOSS_WEIGHTS[k.upper()]
+                else:
+                    loss_smpl_params[k] = torch.nn.functional.mse_loss(pred.reshape(batch_size, -1), gt.reshape(batch_size, -1)) * self.cfg.LOSS_WEIGHTS[k.upper()]
 
-        loss = self.cfg.LOSS_WEIGHTS['KEYPOINTS_3D'] * loss_keypoints_3d+\
-               self.cfg.LOSS_WEIGHTS['KEYPOINTS_2D'] * loss_keypoints_2d+\
-               sum([loss_smpl_params[k] * self.cfg.LOSS_WEIGHTS[k.upper()] for k in loss_smpl_params])
+        # Total loss
+        loss = (
+            loss_keypoints_2d
+            + sum([loss_smpl_params[k] for k in loss_smpl_params])
+            + loss_vertices_2d
+            + loss_vertices_3d
+        )
 
-        losses = dict(loss=loss.detach(),
-                      loss_keypoints_2d=loss_keypoints_2d.detach(),
-                      loss_keypoints_3d=loss_keypoints_3d.detach())
+        losses = dict(
+            loss=loss.detach(),
+            loss_keypoints_2d=loss_keypoints_2d.detach(),
+            loss_keypoints_3d=loss_keypoints_3d.detach(),
+            loss_vertices_2d=loss_vertices_2d.detach(),
+            loss_vertices_3d=loss_vertices_3d.detach(),
+        )
 
         for k, v in loss_smpl_params.items():
             losses['loss_' + k] = v.detach()
@@ -207,6 +236,8 @@ class HMR2(pl.LightningModule):
         """
 
         mode = 'train' if train else 'val'
+        if mode == 'val':
+            step_count = step_count + 1
         batch_size = batch['keypoints_2d'].shape[0]
         images = batch['img']
         images = images * torch.tensor([0.229, 0.224, 0.225], device=images.device).reshape(1,3,1,1)
@@ -215,17 +246,20 @@ class HMR2(pl.LightningModule):
 
         pred_keypoints_3d = output['pred_keypoints_3d'].detach().reshape(batch_size, -1, 3)
         pred_vertices = output['pred_vertices'].detach().reshape(batch_size, -1, 3)
-        focal_length = output['focal_length'].detach().reshape(batch_size, 2)
+        pred_vertices_2d = output['pred_vertices_2d'].detach().reshape(batch_size, -1, 2)
+        gt_vertices = batch['vertices'].detach().reshape(batch_size, -1, 4)[..., :3]
+        gt_vertices_2d = batch['vertices_2d'].detach().reshape(batch_size, -1, 3)[..., :2]
         gt_keypoints_3d = batch['keypoints_3d']
         gt_keypoints_2d = batch['keypoints_2d']
         losses = output['losses']
-        pred_cam_t = output['pred_cam_t'].detach().reshape(batch_size, 3)
         pred_keypoints_2d = output['pred_keypoints_2d'].detach().reshape(batch_size, -1, 2)
 
         if write_to_summary_writer:
-            summary_writer = self.logger.experiment
             for loss_name, val in losses.items():
-                summary_writer.add_scalar(mode +'/' + loss_name, val.detach().item(), step_count)
+                self.logger.experiment.log({
+                    f"{mode}/{loss_name}": val.detach().item()
+                }, step=step_count)
+
         num_images = min(batch_size, self.cfg.EXTRA.NUM_LOG_IMAGES)
 
         gt_keypoints_3d = batch['keypoints_3d']
@@ -238,13 +272,19 @@ class HMR2(pl.LightningModule):
         #                            images=images[:num_images],
         #                            camera_translation=pred_cam_t[:num_images])
         predictions = self.mesh_renderer.visualize_tensorboard(pred_vertices[:num_images].cpu().numpy(),
-                                                               pred_cam_t[:num_images].cpu().numpy(),
+                                                               gt_vertices[:num_images].cpu().numpy(),
+                                                               pred_vertices_2d[:num_images].cpu().numpy(),
+                                                               gt_vertices_2d[:num_images].cpu().numpy(),
                                                                images[:num_images].cpu().numpy(),
                                                                pred_keypoints_2d[:num_images].cpu().numpy(),
-                                                               gt_keypoints_2d[:num_images].cpu().numpy(),
-                                                               focal_length=focal_length[:num_images].cpu().numpy())
+                                                               gt_keypoints_2d[:num_images].cpu().numpy())
+
+        predictions = predictions[:, ::2, ::2]
         if write_to_summary_writer:
-            summary_writer.add_image('%s/predictions' % mode, predictions, step_count)
+            # summary_writer.add_image('%s/predictions' % mode, predictions, step_count)
+            self.logger.experiment.log({
+                f"{mode}/predictions": wandb.Image(predictions)
+            }, step=step_count)
 
         return predictions
 
@@ -298,7 +338,7 @@ class HMR2(pl.LightningModule):
             Dict: Dictionary containing regression output.
         """
         batch = joint_batch['img']
-        mocap_batch = joint_batch['mocap']
+        # mocap_batch = joint_batch['mocap']
         optimizer = self.optimizers(use_pl_optimizer=True)
         if self.cfg.LOSS_WEIGHTS.ADVERSARIAL > 0:
             optimizer, optimizer_disc = optimizer
@@ -325,15 +365,15 @@ class HMR2(pl.LightningModule):
             gn = torch.nn.utils.clip_grad_norm_(self.get_parameters(), self.cfg.TRAIN.GRAD_CLIP_VAL, error_if_nonfinite=True)
             self.log('train/grad_norm', gn, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         optimizer.step()
-        if self.cfg.LOSS_WEIGHTS.ADVERSARIAL > 0:
-            loss_disc = self.training_step_discriminator(mocap_batch, pred_smpl_params['body_pose'].reshape(batch_size, -1), pred_smpl_params['betas'].reshape(batch_size, -1), optimizer_disc)
-            output['losses']['loss_gen'] = loss_adv
-            output['losses']['loss_disc'] = loss_disc
+        # if self.cfg.LOSS_WEIGHTS.ADVERSARIAL > 0:
+        #     loss_disc = self.training_step_discriminator(mocap_batch, pred_smpl_params['body_pose'].reshape(batch_size, -1), pred_smpl_params['betas'].reshape(batch_size, -1), optimizer_disc)
+        #     output['losses']['loss_gen'] = loss_adv
+        #     output['losses']['loss_disc'] = loss_disc
 
         if self.global_step > 0 and self.global_step % self.cfg.GENERAL.LOG_STEPS == 0:
             self.tensorboard_logging(batch, output, self.global_step, train=True)
 
-        self.log('train/loss', output['losses']['loss'], on_step=True, on_epoch=True, prog_bar=True, logger=False)
+        self.log('train/loss', output['losses']['loss'], on_step=True, on_epoch=True, prog_bar=True, logger=True)
 
         return output
 
@@ -351,5 +391,7 @@ class HMR2(pl.LightningModule):
         loss = self.compute_loss(batch, output, train=False)
         output['loss'] = loss
         self.tensorboard_logging(batch, output, self.global_step, train=False)
+
+        self.log('val/loss_keypoints_2d', output['losses']['loss_keypoints_2d'], on_epoch=True, prog_bar=True, logger=True)
 
         return output

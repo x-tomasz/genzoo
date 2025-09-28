@@ -1,106 +1,143 @@
-=======
-# 4DHumans: Reconstructing and Tracking Humans with Transformers
-Code repository for the paper:
-**Humans in 4D: Reconstructing and Tracking Humans with Transformers**
-[Shubham Goel](https://people.eecs.berkeley.edu/~shubham-goel/), [Georgios Pavlakos](https://geopavlakos.github.io/), [Jathushan Rajasegaran](http://people.eecs.berkeley.edu/~jathushan/), [Angjoo Kanazawa](https://people.eecs.berkeley.edu/~kanazawa/)<sup>\*</sup>, [Jitendra Malik](http://people.eecs.berkeley.edu/~malik/)<sup>\*</sup>
+<h1 align="center">Generative Zoo</h1>
 
-[![arXiv](https://img.shields.io/badge/arXiv-2305.20091-00ff00.svg)](https://arxiv.org/pdf/2305.20091.pdf)  [![Website shields.io](https://img.shields.io/website-up-down-green-red/http/shields.io.svg)](https://shubham-goel.github.io/4dhumans/)     [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ex4gE5v1bPR3evfhtG7sDHxQGsWwNwby?usp=sharing)  [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/brjathu/HMR2.0)
+<p align="center">
+  <a href="https://ps.is.mpg.de/person/ntomasz">Tomasz Niewiadomski</a>,
+  <a href="https://ps.is.mpg.de/person/ayiannakidis">Anastasios Yiannakidis</a>,
+  <a href="https://www.hanzcuevas.com/">Hanz Cuevas-Velasquez</a>,
+  <a href="https://sites.google.com/view/soubhiksanyal/">Soubhik Sanyal</a>,<br/>
+  <a href="https://ps.is.mpg.de/person/black">Michael J. Black</a>,
+  <a href="https://imati.cnr.it/mypage.php?idk=PG-2">Silvia Zuffi</a>,
+  <a href="https://kulits.github.io/">Peter Kulits</a>
+</p>
 
+<p align="center">
+  <a href="https://genzoo.is.tue.mpg.de">Project Page</a> •
+  <a href="https://genzoo-org-genzoo.hf.space/">Demo</a>
+</p>
 
-![teaser](assets/teaser.png)
+---
 
-## Installation and Setup
-First, clone the repo. Then, we recommend creating a clean [conda](https://docs.conda.io/) environment, installing all dependencies, and finally activating the environment, as follows:
+## 📖 Overview
+
+Generative Zoo (GenZoo) provides a scalable pipeline for generating realistic 3D animal pose-and-shape training data.  
+Models trained exclusively on GenZoo data achieve **state-of-the-art performance** on real-world 3D animal pose and shape estimation benchmarks.
+
+<div align="center">
+  <img src="https://download.is.tue.mpg.de/genzoo/teaser.jpg" width="100%">
+</div>
+
+---
+
+## ⚙️ Installation
+
+1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+2. Clone the repository:
 ```bash
-git clone https://github.com/shubham-goel/4D-Humans.git
-cd 4D-Humans
-conda env create -f environment.yml
-conda activate 4D-humans
+   git clone https://github.com/x-tomasz/genzoo
+   cd genzoo
 ```
 
-If conda is too slow, you can use pip:
+3. Sync the uv environment:
+
 ```bash
-conda create --name 4D-humans python=3.10
-conda activate 4D-humans
-pip install torch
-pip install -e .[all]
+uv sync --locked
 ```
 
-All checkpoints and data will automatically be downloaded to `$HOME/.cache/4DHumans` the first time you run the demo code.
+---
+## 📂 Model Weights & Configs
 
-Besides these files, you also need to download the *SMPL* model. You will need the [neutral model](http://smplify.is.tue.mpg.de) for training and running the demo code. Please go to the corresponding website and register to get access to the downloads section. Download the model and place `basicModel_neutral_lbs_10_207_0_v1.0.0.pkl` in `./data/`.
+1. Register on the [project website](https://genzoo.is.tue.mpg.de), download the following files, and place them in `./data/`:
+   - [`genzoo_1M.ckpt`](https://download.is.tue.mpg.de/download.php?domain=genzoo&resume=1&sfile=genzoo_1M.ckpt)
+   - [`smal_plus.pkl`](https://download.is.tue.mpg.de/download.php?domain=genzoo&resume=1&sfile=smal_plus.pkl)
+   - [`animal_attributes.npz`](https://download.is.tue.mpg.de/download.php?domain=genzoo&resume=1&sfile=animal_attributes.npz)
+   - [`dog_poses.npz`](https://download.is.tue.mpg.de/download.php?domain=genzoo&resume=1&sfile=dog_poses.npz)
 
-## Run demo on images
-The following command will run ViTDet and HMR2.0 on all images in the specified `--img_folder`, and save renderings of the reconstructions in `--out_folder`. `--batch_size` batches the images together for faster processing. The `--side_view` flags additionally renders the side view of the reconstructed mesh, `--full_frame` renders all people together in front view, `--save_mesh` saves meshes as `.obj`s.
+2. Download the following external dependencies into `./data/`:
+   - [`submission_animal_realnvp_mask_pred_net_6000.pth`](https://github.com/silviazuffi/awol)
+   - [`vitpose_backbone.pth`](https://github.com/shubham-goel/4D-Humans)
+
+---
+
+## 🚀 Inference
+
+Run inference on cropped input images:
 ```bash
-python demo.py \
-    --img_folder example_data/images \
-    --out_folder demo_out \
-    --batch_size=48 --side_view --save_mesh --full_frame
+uv run python inference.py ./eg_input --render
 ```
+---
+## 🛠️ Data Generation Pipeline
 
-## Run tracking demo on videos
-Our tracker builds on PHALP, please install that first:
+Start the GenZoo pipeline notebook:
 ```bash
-pip install git+https://github.com/brjathu/PHALP.git
+uv run jupyter notebook genzoo_pipeline.ipynb
 ```
-
-Now, run `track.py` to reconstruct and track humans in any video. Input video source may be a video file, a folder of frames, or a youtube link:
+On a headless server:
 ```bash
-# Run on video file
-python track.py video.source="example_data/videos/gymnasts.mp4"
-
-# Run on extracted frames
-python track.py video.source="/path/to/frames_folder/"
-
-# Run on a youtube link (depends on pytube working properly)
-python track.py video.source=\'"https://www.youtube.com/watch?v=xEH_5T9jMVU"\'
+uv run jupyter notebook genzoo_pipeline.ipynb --no-browser --port=8888 --ip=0.0.0.0
 ```
-The output directory (`./outputs` by default) will contain a video rendering of the tracklets and a `.pkl` file containing the tracklets with 3D pose and shape. Please see the [PHALP](https://github.com/brjathu/PHALP) repository for details.
 
-## Training
-Download the [training data](https://www.dropbox.com/sh/mjdwu59fxuhls5h/AACQ6FCGSrggUXmRzuubRHXIa) to `./hmr2_training_data/`, then start training using the following command:
-```
-bash fetch_training_data.sh
-python train.py exp_name=hmr2 data=mix_all experiment=hmr_vit_transformer trainer=gpu launcher=local
-```
-Checkpoints and logs will be saved to `./logs/`. We trained on 8 A100 GPUs for 7 days using PyTorch 1.13.1 and PyTorch-Lightning 1.8.1 with CUDA 11.6 on a Linux system. You may adjust batch size and number of GPUs per your convenience.
+---
 
-## Evaluation
-Download the [evaluation metadata](https://www.dropbox.com/scl/fi/kl79djemdgqcl6d691er7/hmr2_evaluation_data.tar.gz?rlkey=ttmbdu3x5etxwqqyzwk581zjl) to `./hmr2_evaluation_data/`. Additionally, download the Human3.6M, 3DPW, LSP-Extended, COCO, and PoseTrack dataset images and update the corresponding paths in  `hmr2/configs/datasets_eval.yaml`.
+## 🎓 Training
 
-Run evaluation on multiple datasets as follows, results are stored in `results/eval_regression.csv`. 
+1. Download and extract Pascal VOC (≈2 GB) under `./data/` for synthetic augmentation (see [isarandi/synthetic-occlusion](https://github.com/isarandi/synthetic-occlusion)).
+
+2. Download the GenZoo training datasets:
+   - **v1**: weak perspective camera  
+   - **v2**: full perspective camera  
+
+*(Uncomment `## Full perspective` code in `hmr2/datasets/image_dataset.py` to use full perspective camera GT)*
+
+3. Prepare WebDataset tars with your chosen paths:
 ```bash
-python eval.py --dataset 'H36M-VAL-P2,3DPW-TEST,LSP-EXTENDED,POSETRACK-VAL,COCO-VAL' 
+uv run python prep_tars.py
 ```
 
-By default, our code uses the released checkpoint (mentioned as HMR2.0b in the paper). To use the HMR2.0a checkpoint, you may download and untar from [here](https://people.eecs.berkeley.edu/~jathushan/projects/4dhumans/hmr2a_model.tar.gz)
+4. Choose test set, and specify the path in `hmr2/configs/datasets_tar.yaml`, `COCO-VAL` field.
+(Default is [`Animal3D` (real)](https://xujiacong.github.io/Animal3D) or [`GenZoo-Felidae` (synthetic)](https://download.is.tue.mpg.de/download.php?domain=genzoo&resume=1&sfile=GenZoo_Felidae.zip))
 
-## Preprocess code
-To preprocess LSP Extended and Posetrack into metadata zip files for evaluation, see `hmr2/datasets/preprocess`.
+5. Run training:
+```bash
+uv run python train_genzoo.py exp_name=your_exp_name \
+  data=mix_all experiment=hmr_vit_transformer trainer=gpu launcher=local
+```
+---
+## 🙏 Acknowledgments
 
-Training data preprocessing coming soon.
+This project builds on and adapts parts of:
+- [4D-Humans](https://github.com/shubham-goel/4D-Humans)
+- [AWOL](https://github.com/silviazuffi/awol)  
+- [SMAL](https://github.com/vchoutas/smal)
+- [Synthetic Occlusion](https://github.com/isarandi/synthetic-occlusion)
 
-## Acknowledgements
-Parts of the code are taken or adapted from the following repos:
-- [ProHMR](https://github.com/nkolot/ProHMR)
-- [SPIN](https://github.com/nkolot/SPIN)
-- [SMPLify-X](https://github.com/vchoutas/smplify-x)
-- [HMR](https://github.com/akanazawa/hmr)
-- [ViTPose](https://github.com/ViTAE-Transformer/ViTPose)
-- [Detectron2](https://github.com/facebookresearch/detectron2)
+Special thanks to all GenZoo co-authors for their contributions and support, and in particular to [Peter Kulits](https://kulits.github.io) for supervision and guidance.
 
-Additionally, we thank [StabilityAI](https://stability.ai/) for a generous compute grant that enabled this work.
+---
 
-## Citing
-If you find this code useful for your research, please consider citing the following paper:
+## 🎤 ICCV 2025 Presentation 🌺🌴🌊
+
+GenZoo will be presented as a **poster at ICCV 2025** in Hawaii:  
+
+- **Poster ID:** [#788](https://iccv.thecvf.com/virtual/2025/poster/109)  
+- **Session:** Tue, 21 Oct 2025 — 6:15 p.m. to 8:15 p.m. PDT  
+- **Authors:** Tomasz Niewiadomski, Anastasios Yiannakidis, Hanz Cuevas Velasquez, Soubhik Sanyal, Michael J. Black, Silvia Zuffi, Peter Kulits  
+ 
+--- 
+
+## 📝 Citation
+
+If you use GenZoo in your research, please cite:
 
 ```bibtex
-@inproceedings{goel2023humans,
-    title={Humans in 4{D}: Reconstructing and Tracking Humans with Transformers},
-    author={Goel, Shubham and Pavlakos, Georgios and Rajasegaran, Jathushan and Kanazawa, Angjoo and Malik, Jitendra},
-    booktitle={ICCV},
-    year={2023}
+@inproceedings{niewiadomski2025ICCV,
+  author    = {Niewiadomski, Tomasz and Yiannakidis, Anastasios and Cuevas-Velasquez, Hanz and Sanyal, Soubhik and Black, Michael J. and Zuffi, Silvia and Kulits, Peter},
+  title     = {Generative Zoo},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  year      = {2025}
 }
 ```
->>>>>>> 4dh/main
+---
+
+## 📜 License
+
+We build off the [4D-Humans](https://github.com/shubham-goel/4D-Humans) codebase to perform our experiments. As such, inherited code falls under the original MIT license. Additions and modifications are released under a different license in accordance with institute requirements which has been prepended to [LICENSE.md](LICENSE.md). 

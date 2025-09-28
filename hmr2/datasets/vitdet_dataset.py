@@ -8,7 +8,8 @@ import torch
 
 from .utils import (convert_cvimg_to_tensor,
                     expand_to_aspect_ratio,
-                    generate_image_patch_cv2)
+                    generate_image_patch_cv2,
+                    generate_image_patch_cv2_resize)
 
 DEFAULT_MEAN = 255. * np.array([0.485, 0.456, 0.406])
 DEFAULT_STD = 255. * np.array([0.229, 0.224, 0.225])
@@ -48,8 +49,8 @@ class ViTDetDataset(torch.utils.data.Dataset):
         center_y = center[1]
 
         scale = self.scale[idx]
-        BBOX_SHAPE = self.cfg.MODEL.get('BBOX_SHAPE', None)
-        bbox_size = expand_to_aspect_ratio(scale*200, target_aspect_ratio=BBOX_SHAPE).max()
+        # BBOX_SHAPE = self.cfg.MODEL.get('BBOX_SHAPE', None)
+        bbox_size = np.array([scale*200]).max() # expand_to_aspect_ratio(scale*200, target_aspect_ratio=BBOX_SHAPE).max()
 
         patch_width = patch_height = self.img_size
 
@@ -59,18 +60,17 @@ class ViTDetDataset(torch.utils.data.Dataset):
         if True:
             # Blur image to avoid aliasing artifacts
             downsampling_factor = ((bbox_size*1.0) / patch_width)
-            print(f'{downsampling_factor=}')
+            # print(f'{downsampling_factor=}')  # Debug output removed
             downsampling_factor = downsampling_factor / 2.0
             if downsampling_factor > 1.1:
                 cvimg  = gaussian(cvimg, sigma=(downsampling_factor-1)/2, channel_axis=2, preserve_range=True)
 
-
-        img_patch_cv, trans = generate_image_patch_cv2(cvimg,
+        # changed to just resize, instead of zero padding
+        img_patch_cv = generate_image_patch_cv2_resize(cvimg,
                                                     center_x, center_y,
                                                     bbox_size, bbox_size,
                                                     patch_width, patch_height,
-                                                    False, 1.0, 0,
-                                                    border_mode=cv2.BORDER_CONSTANT)
+                                                    False, 1.0, 0)
         img_patch_cv = img_patch_cv[:, :, ::-1]
         img_patch = convert_cvimg_to_tensor(img_patch_cv)
 

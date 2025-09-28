@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 
-from timm.models.layers import drop_path, to_2tuple, trunc_normal_
+from timm.layers import drop_path, to_2tuple, trunc_normal_
 
 def vit(cfg):
     return ViT(

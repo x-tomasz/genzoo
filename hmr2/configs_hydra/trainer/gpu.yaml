@@ -4,3 +4,4 @@ defaults:
 
 accelerator: gpu
 devices: 1
+# profiler: simple

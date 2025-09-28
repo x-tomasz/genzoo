@@ -22,7 +22,7 @@ _C.GENERAL.RESUME = True
 _C.GENERAL.TIME_TO_RUN = 3300
 _C.GENERAL.VAL_STEPS = 100
 _C.GENERAL.LOG_STEPS = 100
-_C.GENERAL.CHECKPOINT_STEPS = 20000
+_C.GENERAL.CHECKPOINT_STEPS = 4000
 _C.GENERAL.CHECKPOINT_DIR = "checkpoints"
 _C.GENERAL.SUMMARY_DIR = "tensorboard"
 _C.GENERAL.NUM_GPUS = 1
@@ -39,9 +39,9 @@ _C.TRAIN = CN(new_allowed=True)
 _C.TRAIN.NUM_EPOCHS = 100
 _C.TRAIN.BATCH_SIZE = 32
 _C.TRAIN.SHUFFLE = True
-_C.TRAIN.WARMUP = False
+_C.TRAIN.WARMUP = True
 _C.TRAIN.NORMALIZE_PER_IMAGE = False
-_C.TRAIN.CLIP_GRAD = False
+_C.TRAIN.CLIP_GRAD = True
 _C.TRAIN.CLIP_GRAD_VALUE = 1.0
 _C.LOSS_WEIGHTS = CN(new_allowed=True)
 
@@ -108,9 +108,9 @@ def get_config(config_file: str, merge: bool = True, update_cachedir: bool = Fal
           return path
         return os.path.join(CACHE_DIR_4DHUMANS, path)
 
-      cfg.SMPL.MODEL_PATH = update_path(cfg.SMPL.MODEL_PATH)
-      cfg.SMPL.JOINT_REGRESSOR_EXTRA = update_path(cfg.SMPL.JOINT_REGRESSOR_EXTRA)
-      cfg.SMPL.MEAN_PARAMS = update_path(cfg.SMPL.MEAN_PARAMS)
+      # cfg.SMPL.MODEL_PATH = update_path(cfg.SMPL.MODEL_PATH)
+      # cfg.SMPL.JOINT_REGRESSOR_EXTRA = update_path(cfg.SMPL.JOINT_REGRESSOR_EXTRA)
+      # cfg.SMPL.MEAN_PARAMS = update_path(cfg.SMPL.MEAN_PARAMS)
 
     cfg.freeze()
     return cfg

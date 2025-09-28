@@ -6,6 +6,7 @@ import cv2
 import math
 import numpy as np
 from typing import List, Tuple
+import colorsys
 
 def get_keypoints_rectangle(keypoints: np.array, threshold: float) -> Tuple[float, float, float]:
     """
@@ -50,7 +51,7 @@ def render_keypoints(img: np.array,
         pose_scales (List): List of pose scales.
         threshold (float): Only visualize keypoints with confidence above the threshold.
     Returns:
-        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image. 
+        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image.
     """
     img_orig = img.copy()
     width, height = img.shape[1], img.shape[2]
@@ -76,8 +77,8 @@ def render_keypoints(img: np.array,
                 thicknessLineScaled = int(round(min(thicknessLine[index1], thicknessLine[index2]) * pose_scales[0]))
                 colorIndex = index2
                 color = colors[colorIndex % numberColors]
-                keypoint1 = keypoints[index1, :-1].astype(np.int)
-                keypoint2 = keypoints[index2, :-1].astype(np.int)
+                keypoint1 = keypoints[index1, :-1].astype(int) # np.int
+                keypoint2 = keypoints[index2, :-1].astype(int) # np.int
                 cv2.line(img, tuple(keypoint1.tolist()), tuple(keypoint2.tolist()), tuple(color.tolist()), thicknessLineScaled, lineType, shift)
         for part in range(len(keypoints)):
             faceIndex = part
@@ -86,7 +87,7 @@ def render_keypoints(img: np.array,
                 thicknessCircleScaled = int(round(thicknessCircle[faceIndex] * pose_scales[0]))
                 colorIndex = part
                 color = colors[colorIndex % numberColors]
-                center = keypoints[faceIndex, :-1].astype(np.int)
+                center = keypoints[faceIndex, :-1].astype(int) # np.int
                 cv2.circle(img, tuple(center.tolist()), radiusScaled, tuple(color.tolist()), thicknessCircleScaled, lineType, shift)
     return img
 
@@ -98,40 +99,46 @@ def render_body_keypoints(img: np.array,
         img (np.array): Input image of shape (H, W, 3) with pixel values in the [0,255] range.
         body_keypoints (np.array): Keypoint array of shape (N, 3); 3 <====> (x, y, confidence).
     Returns:
-        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image. 
+        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image.
     """
 
     thickness_circle_ratio = 1./75. * np.ones(body_keypoints.shape[0])
     thickness_line_ratio_wrt_circle = 0.75
     pairs = []
-    pairs = [1,8,1,2,1,5,2,3,3,4,5,6,6,7,8,9,9,10,10,11,8,12,12,13,13,14,1,0,0,15,15,17,0,16,16,18,14,19,19,20,14,21,11,22,22,23,11,24]
+    # pairs = [1,8,1,2,1,5,2,3,3,4,5,6,6,7,8,9,9,10,10,11,8,12,12,13,13,14,1,0,0,15,15,17,0,16,16,18,14,19,19,20,14,21,11,22,22,23,11,24]
+    pairs = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6), (6, 7), (7, 8), (8, 9), (9, 10), (6, 11), (11, 12), (12, 13), (13, 14), (6, 15), (15, 16), (0, 17), (17, 18), (18, 19), (19, 20), (0, 21), (21, 22), (22, 23), (23, 24), (0, 25), (25, 26), (26, 27), (27, 28), (28, 29), (29, 30), (30, 31), (16, 32), (16, 33), (16, 34)]
     pairs = np.array(pairs).reshape(-1,2)
-    colors = [255.,     0.,     85.,
-              255.,     0.,     0.,
-              255.,    85.,     0.,
-              255.,   170.,     0.,
-              255.,   255.,     0.,
-              170.,   255.,     0.,
-               85.,   255.,     0.,
-                0.,   255.,     0.,
-              255.,     0.,     0.,
-                0.,   255.,    85.,
-                0.,   255.,   170.,
-                0.,   255.,   255.,
-                0.,   170.,   255.,
-                0.,    85.,   255.,
-                0.,     0.,   255.,
-              255.,     0.,   170.,
-              170.,     0.,   255.,
-              255.,     0.,   255.,
-               85.,     0.,   255.,
-                0.,     0.,   255.,
-                0.,     0.,   255.,
-                0.,     0.,   255.,
-                0.,   255.,   255.,
-                0.,   255.,   255.,
-                0.,   255.,   255.]
-    colors = np.array(colors).reshape(-1,3)
+    # colors = [255.,     0.,     85.,
+    #           255.,     0.,     0.,
+    #           255.,    85.,     0.,
+    #           255.,   170.,     0.,
+    #           255.,   255.,     0.,
+    #           170.,   255.,     0.,
+    #            85.,   255.,     0.,
+    #             0.,   255.,     0.,
+    #           255.,     0.,     0.,
+    #             0.,   255.,    85.,
+    #             0.,   255.,   170.,
+    #             0.,   255.,   255.,
+    #             0.,   170.,   255.,
+    #             0.,    85.,   255.,
+    #             0.,     0.,   255.,
+    #           255.,     0.,   170.,
+    #           170.,     0.,   255.,
+    #           255.,     0.,   255.,
+    #            85.,     0.,   255.,
+    #             0.,     0.,   255.,
+    #             0.,     0.,   255.,
+    #             0.,     0.,   255.,
+    #             0.,   255.,   255.,
+    #             0.,   255.,   255.,
+    #             0.,   255.,   255.]
+    # colors = np.array(colors).reshape(-1,3)
+    N = pairs.max() + 1
+    colors = 255 * np.array(
+        [colorsys.hsv_to_rgb(h, s, v) for h, s, v in zip(np.arange(N) / ((1 + np.sqrt(5)) / 2) % 1, np.linspace(0.5, 1, N), np.linspace(0.8, 1, N))]
+    )
+
     pose_scales = [1]
     return render_keypoints(img, body_keypoints, pairs, colors, thickness_circle_ratio, thickness_line_ratio_wrt_circle, pose_scales, 0.1)
 
@@ -143,7 +150,7 @@ def render_openpose(img: np.array,
         img (np.array): Input image of shape (H, W, 3) with pixel values in the [0,255] range.
         body_keypoints (np.array): Keypoint array of shape (N, 3); 3 <====> (x, y, confidence).
     Returns:
-        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image. 
+        (np.array): Image of shape (H, W, 3) with keypoints drawn on top of the original image.
     """
     img = render_body_keypoints(img, body_keypoints)
     return img

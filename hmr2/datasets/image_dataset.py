@@ -6,10 +6,11 @@ from typing import Any, Dict, List
 from yacs.config import CfgNode
 import braceexpand
 import cv2
-
-from .dataset import Dataset
-from .utils import get_example, expand_to_aspect_ratio
-from .smplh_prob_filter import poses_check_probable, load_amass_hist_smooth
+import smplx
+from torch.utils.data import Dataset
+from .utils import get_example, expand_to_aspect_ratio, get_bbox
+import random
+import torchvision.transforms.v2 as T
 
 def expand(s):
     return os.path.expanduser(os.path.expandvars(s))
@@ -43,169 +44,46 @@ DEFAULT_MEAN = 255. * np.array([0.485, 0.456, 0.406])
 DEFAULT_STD = 255. * np.array([0.229, 0.224, 0.225])
 DEFAULT_IMG_SIZE = 256
 
+class SMALLayer(smplx.SMPLLayer):
+    NUM_JOINTS = 34
+    NUM_BODY_JOINTS = 34
+    SHAPE_SPACE_DIM = 145
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.vertex_joint_selector.extra_joints_idxs = torch.empty(0, dtype=torch.int32)
+
+def symmetric_orthogonalization(x):
+    """Maps 9D input vectors onto SO(3) via symmetric orthogonalization.
+
+    x: should have size [batch_size, 9]
+
+    Output has size [batch_size, 3, 3], where each inner 3x3 matrix is in SO(3).
+    """
+    m = x.view(-1, 3, 3)
+    u, s, v = torch.svd(m)
+    vt = torch.transpose(v, 1, 2)
+    det = torch.det(torch.matmul(u, vt))
+    det = det.view(-1, 1, 1)
+    vt = torch.cat((vt[:, :2, :], vt[:, -1:, :] * det), 1)
+    r = torch.matmul(u, vt)
+    return r
+
+def weak_perspective_project(verts, scale, tx, ty):
+    proj = verts[:, :2] * scale
+    proj[:, 0] += tx
+    proj[:, 1] += ty
+    return proj
+
+def full_perspective_project(X, fov, image):
+                cx, cy = (image.shape[0] / 2, image.shape[0] / 2)
+                f = (cx / 2) / np.tan(np.deg2rad(fov / 2))
+                k = np.array([[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]])
+                proj = (k @ X.T).T
+                proj /= proj[:, 2, None]
+                return proj[:, :2]
+
 class ImageDataset(Dataset):
-
-    def __init__(self,
-                 cfg: CfgNode,
-                 dataset_file: str,
-                 img_dir: str,
-                 train: bool = True,
-                 prune: Dict[str, Any] = {},
-                 **kwargs):
-        """
-        Dataset class used for loading images and corresponding annotations.
-        Args:
-            cfg (CfgNode): Model config file.
-            dataset_file (str): Path to npz file containing dataset info.
-            img_dir (str): Path to image folder.
-            train (bool): Whether it is for training or not (enables data augmentation).
-        """
-        super(ImageDataset, self).__init__()
-        self.train = train
-        self.cfg = cfg
-
-        self.img_size = cfg.MODEL.IMAGE_SIZE
-        self.mean = 255. * np.array(self.cfg.MODEL.IMAGE_MEAN)
-        self.std = 255. * np.array(self.cfg.MODEL.IMAGE_STD)
-
-        self.img_dir = img_dir
-        self.data = np.load(dataset_file, allow_pickle=True)
-
-        self.imgname = self.data['imgname']
-        self.personid = np.zeros(len(self.imgname), dtype=np.int32)
-        self.extra_info = self.data.get('extra_info', [{} for _ in range(len(self.imgname))])
-
-        self.flip_keypoint_permutation = copy.copy(FLIP_KEYPOINT_PERMUTATION)
-
-        num_pose = 3 * (self.cfg.SMPL.NUM_BODY_JOINTS + 1)
-
-        # Bounding boxes are assumed to be in the center and scale format
-        self.center = self.data['center']
-        self.scale = self.data['scale'].reshape(len(self.center), -1) / 200.0
-        if self.scale.shape[1] == 1:
-            self.scale = np.tile(self.scale, (1, 2))
-        assert self.scale.shape == (len(self.center), 2)
-
-        # Get gt SMPLX parameters, if available
-        try:
-            self.body_pose = self.data['body_pose'].astype(np.float32)
-            self.has_body_pose = self.data['has_body_pose'].astype(np.float32)
-        except KeyError:
-            self.body_pose = np.zeros((len(self.imgname), num_pose), dtype=np.float32)
-            self.has_body_pose = np.zeros(len(self.imgname), dtype=np.float32)
-        try:
-            self.betas = self.data['betas'].astype(np.float32)
-            self.has_betas = self.data['has_betas'].astype(np.float32)
-        except KeyError:
-            self.betas = np.zeros((len(self.imgname), 10), dtype=np.float32)
-            self.has_betas = np.zeros(len(self.imgname), dtype=np.float32)
-
-        # Try to get 2d keypoints, if available
-        try:
-            body_keypoints_2d = self.data['body_keypoints_2d']
-        except KeyError:
-            body_keypoints_2d = np.zeros((len(self.center), 25, 3))
-        # Try to get extra 2d keypoints, if available
-        try:
-            extra_keypoints_2d = self.data['extra_keypoints_2d']
-        except KeyError:
-            extra_keypoints_2d = np.zeros((len(self.center), 19, 3))
-
-        self.keypoints_2d = np.concatenate((body_keypoints_2d, extra_keypoints_2d), axis=1).astype(np.float32)
-
-        # Try to get 3d keypoints, if available
-        try:
-            body_keypoints_3d = self.data['body_keypoints_3d'].astype(np.float32)
-        except KeyError:
-            body_keypoints_3d = np.zeros((len(self.center), 25, 4), dtype=np.float32)
-        # Try to get extra 3d keypoints, if available
-        try:
-            extra_keypoints_3d = self.data['extra_keypoints_3d'].astype(np.float32)
-        except KeyError:
-            extra_keypoints_3d = np.zeros((len(self.center), 19, 4), dtype=np.float32)
-
-        body_keypoints_3d[:, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], -1] = 0
-
-        self.keypoints_3d = np.concatenate((body_keypoints_3d, extra_keypoints_3d), axis=1).astype(np.float32)
-
-    def __len__(self) -> int:
-        return len(self.scale)
-
-    def __getitem__(self, idx: int) -> Dict:
-        """
-        Returns an example from the dataset.
-        """
-        try:
-            image_file_rel = self.imgname[idx].decode('utf-8')
-        except AttributeError:
-            image_file_rel = self.imgname[idx]
-        image_file = os.path.join(self.img_dir, image_file_rel)
-        keypoints_2d = self.keypoints_2d[idx].copy()
-        keypoints_3d = self.keypoints_3d[idx].copy()
-
-        center = self.center[idx].copy()
-        center_x = center[0]
-        center_y = center[1]
-        scale = self.scale[idx]
-        BBOX_SHAPE = self.cfg.MODEL.get('BBOX_SHAPE', None)
-        bbox_size = expand_to_aspect_ratio(scale*200, target_aspect_ratio=BBOX_SHAPE).max()
-        bbox_expand_factor = bbox_size / ((scale*200).max())
-        body_pose = self.body_pose[idx].copy().astype(np.float32)
-        betas = self.betas[idx].copy().astype(np.float32)
-
-        has_body_pose = self.has_body_pose[idx].copy()
-        has_betas = self.has_betas[idx].copy()
-
-        smpl_params = {'global_orient': body_pose[:3],
-                       'body_pose': body_pose[3:],
-                       'betas': betas
-                      }
-
-        has_smpl_params = {'global_orient': has_body_pose,
-                           'body_pose': has_body_pose,
-                           'betas': has_betas
-                           }
-
-        smpl_params_is_axis_angle = {'global_orient': True,
-                                     'body_pose': True,
-                                     'betas': False
-                                    }
-
-        augm_config = self.cfg.DATASETS.CONFIG
-        # Crop image and (possibly) perform data augmentation
-        img_patch, keypoints_2d, keypoints_3d, smpl_params, has_smpl_params, img_size = get_example(image_file,
-                                                                                                    center_x, center_y,
-                                                                                                    bbox_size, bbox_size,
-                                                                                                    keypoints_2d, keypoints_3d,
-                                                                                                    smpl_params, has_smpl_params,
-                                                                                                    self.flip_keypoint_permutation,
-                                                                                                    self.img_size, self.img_size,
-                                                                                                    self.mean, self.std, self.train, augm_config)
-
-        item = {}
-        # These are the keypoints in the original image coordinates (before cropping)
-        orig_keypoints_2d = self.keypoints_2d[idx].copy()
-
-        item['img'] = img_patch
-        item['keypoints_2d'] = keypoints_2d.astype(np.float32)
-        item['keypoints_3d'] = keypoints_3d.astype(np.float32)
-        item['orig_keypoints_2d'] = orig_keypoints_2d
-        item['box_center'] = self.center[idx].copy()
-        item['box_size'] = bbox_size
-        item['bbox_expand_factor'] = bbox_expand_factor
-        item['img_size'] = 1.0 * img_size[::-1].copy()
-        item['smpl_params'] = smpl_params
-        item['has_smpl_params'] = has_smpl_params
-        item['smpl_params_is_axis_angle'] = smpl_params_is_axis_angle
-        item['imgname'] = image_file
-        item['imgname_rel'] = image_file_rel
-        item['personid'] = int(self.personid[idx])
-        item['extra_info'] = copy.deepcopy(self.extra_info[idx])
-        item['idx'] = idx
-        item['_scale'] = scale
-        return item
-
-
     @staticmethod
     def load_tars_as_webdataset(cfg: CfgNode, urls: str|List[str], train: bool,
             resampled=False,
@@ -221,80 +99,6 @@ class ImageDataset(Dataset):
         MEAN = 255. * np.array(cfg.MODEL.IMAGE_MEAN)
         STD = 255. * np.array(cfg.MODEL.IMAGE_STD)
 
-        def split_data(source):
-            for item in source:
-                datas = item['data.pyd']
-                for data in datas:
-                    if 'detection.npz' in item:
-                        det_idx = data['extra_info']['detection_npz_idx']
-                        mask = item['detection.npz']['masks'][det_idx]
-                    else:
-                        mask = np.ones_like(item['jpg'][:,:,0], dtype=bool)
-                    yield {
-                        '__key__': item['__key__'],
-                        'jpg': item['jpg'],
-                        'data.pyd': data,
-                        'mask': mask,
-                    }
-
-        def suppress_bad_kps(item, thresh=0.0):
-            if thresh > 0:
-                kp2d = item['data.pyd']['keypoints_2d']
-                kp2d_conf = np.where(kp2d[:, 2] < thresh, 0.0, kp2d[:, 2])
-                item['data.pyd']['keypoints_2d'] = np.concatenate([kp2d[:,:2], kp2d_conf[:,None]], axis=1)
-            return item
-
-        def filter_numkp(item, numkp=4, thresh=0.0):
-            kp_conf = item['data.pyd']['keypoints_2d'][:, 2]
-            return (kp_conf > thresh).sum() > numkp
-
-        def filter_reproj_error(item, thresh=10**4.5):
-            losses = item['data.pyd'].get('extra_info', {}).get('fitting_loss', np.array({})).item()
-            reproj_loss = losses.get('reprojection_loss', None)
-            return reproj_loss is None or reproj_loss < thresh
-
-        def filter_bbox_size(item, thresh=1):
-            bbox_size_min = item['data.pyd']['scale'].min().item() * 200.
-            return bbox_size_min > thresh
-
-        def filter_no_poses(item):
-            return (item['data.pyd']['has_body_pose'] > 0)
-
-        def supress_bad_betas(item, thresh=3):
-            has_betas = item['data.pyd']['has_betas']
-            if thresh > 0 and has_betas:
-                betas_abs = np.abs(item['data.pyd']['betas'])
-                if (betas_abs > thresh).any():
-                    item['data.pyd']['has_betas'] = False
-            return item
-
-        amass_poses_hist100_smooth = load_amass_hist_smooth()
-        def supress_bad_poses(item):
-            has_body_pose = item['data.pyd']['has_body_pose']
-            if has_body_pose:
-                body_pose = item['data.pyd']['body_pose']
-                pose_is_probable = poses_check_probable(torch.from_numpy(body_pose)[None, 3:], amass_poses_hist100_smooth).item()
-                if not pose_is_probable:
-                    item['data.pyd']['has_body_pose'] = False
-            return item
-
-        def poses_betas_simultaneous(item):
-            # We either have both body_pose and betas, or neither
-            has_betas = item['data.pyd']['has_betas']
-            has_body_pose = item['data.pyd']['has_body_pose']
-            item['data.pyd']['has_betas'] = item['data.pyd']['has_body_pose'] = np.array(float((has_body_pose>0) and (has_betas>0)))
-            return item
-
-        def set_betas_for_reg(item):
-            # Always have betas set to true
-            has_betas = item['data.pyd']['has_betas']
-            betas = item['data.pyd']['betas']
-
-            if not (has_betas>0):
-                item['data.pyd']['has_betas'] = np.array(float((True)))
-                item['data.pyd']['betas'] = betas * 0
-            return item
-
         # Load the dataset
         if epoch_size is not None:
             resampled = True
@@ -304,44 +108,14 @@ class ImageDataset(Dataset):
                                 nodesplitter=wds.split_by_node,
                                 shardshuffle=True,
                                 resampled=resampled,
-                                cache_dir=cache_dir,
-                              ).select(corrupt_filter)
+                                # cache_dir=cache_dir,
+                                empty_check=False,
+                              )#.select(corrupt_filter)
         if train:
             dataset = dataset.shuffle(100)
-        dataset = dataset.decode('rgb8').rename(jpg='jpg;jpeg;png')
 
-        # Process the dataset
-        dataset = dataset.compose(split_data)
-
-        # Filter/clean the dataset
-        SUPPRESS_KP_CONF_THRESH = cfg.DATASETS.get('SUPPRESS_KP_CONF_THRESH', 0.0)
-        SUPPRESS_BETAS_THRESH = cfg.DATASETS.get('SUPPRESS_BETAS_THRESH', 0.0)
-        SUPPRESS_BAD_POSES = cfg.DATASETS.get('SUPPRESS_BAD_POSES', False)
-        POSES_BETAS_SIMULTANEOUS = cfg.DATASETS.get('POSES_BETAS_SIMULTANEOUS', False)
-        BETAS_REG = cfg.DATASETS.get('BETAS_REG', False)
-        FILTER_NO_POSES = cfg.DATASETS.get('FILTER_NO_POSES', False)
-        FILTER_NUM_KP = cfg.DATASETS.get('FILTER_NUM_KP', 4)
-        FILTER_NUM_KP_THRESH = cfg.DATASETS.get('FILTER_NUM_KP_THRESH', 0.0)
-        FILTER_REPROJ_THRESH = cfg.DATASETS.get('FILTER_REPROJ_THRESH', 0.0)
-        FILTER_MIN_BBOX_SIZE = cfg.DATASETS.get('FILTER_MIN_BBOX_SIZE', 0.0)
-        if SUPPRESS_KP_CONF_THRESH > 0:
-            dataset = dataset.map(lambda x: suppress_bad_kps(x, thresh=SUPPRESS_KP_CONF_THRESH))
-        if SUPPRESS_BETAS_THRESH > 0:
-            dataset = dataset.map(lambda x: supress_bad_betas(x, thresh=SUPPRESS_BETAS_THRESH))
-        if SUPPRESS_BAD_POSES:
-            dataset = dataset.map(lambda x: supress_bad_poses(x))
-        if POSES_BETAS_SIMULTANEOUS:
-            dataset = dataset.map(lambda x: poses_betas_simultaneous(x))
-        if FILTER_NO_POSES:
-            dataset = dataset.select(lambda x: filter_no_poses(x))
-        if FILTER_NUM_KP > 0:
-            dataset = dataset.select(lambda x: filter_numkp(x, numkp=FILTER_NUM_KP, thresh=FILTER_NUM_KP_THRESH))
-        if FILTER_REPROJ_THRESH > 0:
-            dataset = dataset.select(lambda x: filter_reproj_error(x, thresh=FILTER_REPROJ_THRESH))
-        if FILTER_MIN_BBOX_SIZE > 0:
-            dataset = dataset.select(lambda x: filter_bbox_size(x, thresh=FILTER_MIN_BBOX_SIZE))
-        if BETAS_REG:
-            dataset = dataset.map(lambda x: set_betas_for_reg(x))       # NOTE: Must be at the end
+        dataset = dataset.decode('pil').rename(image='jpg;jpeg;png')
+        dataset = dataset.select(lambda x: 'betas' not in x['npz'] or np.abs(x['npz']['betas']).max() < 10)
 
         use_skimage_antialias = cfg.DATASETS.get('USE_SKIMAGE_ANTIALIAS', False)
         border_mode = {
@@ -349,6 +123,20 @@ class ImageDataset(Dataset):
             'replicate': cv2.BORDER_REPLICATE,
         }[cfg.DATASETS.get('BORDER_MODE', 'constant')]
 
+        if train:
+            transforms = T.Compose([
+                T.Resize(256),
+                T.RandomOrder([
+                    T.RandomResize(min_size=56, max_size=256),
+                    T.RandomGrayscale(),
+                    T.RandomPhotometricDistort(),
+                    T.JPEG((50, 90)),
+                ]),
+            ])
+        else:
+            transforms = None
+
+        smal = SMALLayer(model_path=cfg.SMPL.MODEL_PATH, num_betas=SMALLayer.SHAPE_SPACE_DIM)
         # Process the dataset further
         dataset = dataset.map(lambda x: ImageDataset.process_webdataset_tar_item(x, train,
                                                         augm_config=cfg.DATASETS.CONFIG,
@@ -356,7 +144,10 @@ class ImageDataset(Dataset):
                                                         BBOX_SHAPE=BBOX_SHAPE,
                                                         use_skimage_antialias=use_skimage_antialias,
                                                         border_mode=border_mode,
+                                                        smal=smal,
+                                                        transforms=transforms,
                                                         ))
+
         if epoch_size is not None:
             dataset = dataset.with_epoch(epoch_size)
 
@@ -371,54 +162,180 @@ class ImageDataset(Dataset):
                                     BBOX_SHAPE=None,
                                     use_skimage_antialias=False,
                                     border_mode=cv2.BORDER_CONSTANT,
+                                    smal=None,
+                                    transforms=None,
                                     ):
-        # Read data from item
         key = item['__key__']
-        image = item['jpg']
-        data = item['data.pyd']
-        mask = item['mask']
+        image = item['image']
+        data = item['npz']
 
-        keypoints_2d = data['keypoints_2d']
-        keypoints_3d = data['keypoints_3d']
-        center = data['center']
-        scale = data['scale']
-        body_pose = data['body_pose']
-        betas = data['betas']
-        has_body_pose = data['has_body_pose']
-        has_betas = data['has_betas']
-        # image_file = data['image_file']
+        # item = {}
+        # item['img'] = np.zeros((3, IMG_SIZE, IMG_SIZE), dtype=np.float32)
+        # item['keypoints_2d'] = np.zeros((35, 3), dtype=np.float32)
+        # item['keypoints_3d'] = np.zeros((35, 4), dtype=np.float32)
+        # item['vertices_2d'] = np.zeros((3889, 3), dtype=np.float32)
+        # item['vertices'] = np.zeros((3889, 4), dtype=np.float32)
+        # item['box_center'] = np.zeros(2, dtype=np.float32)
+        # item['box_size'] = np.zeros(2, dtype=np.float32)
+        # item['img_size'] = np.array([IMG_SIZE, IMG_SIZE], dtype=np.float32)
+        # item['smpl_params'] = {
+        #     'betas': np.zeros(145, dtype=np.float32),
+        #     'global_orient': np.zeros(9, dtype=np.float32),
+        #     'body_pose': np.zeros(34*9, dtype=np.float32),
+        # }
+        # item['has_smpl_params'] = {
+        #     'betas': False,
+        #     'global_orient': False,
+        #     'body_pose': False,
+        # }
+        # item['imgname'] = key
+        # return item
 
-        # Process data
-        orig_keypoints_2d = keypoints_2d.copy()
+        if transforms is not None:
+            image = transforms(image)
+        image = np.array(image)
+
+        keypoints_2d = data.get('keypoints_2d')
+        keypoints_3d = data.get('keypoints_3d')
+        vertices = data.get('vertices')
+        vertices_2d = data.get('vertices_2d')
+        pose = data.get('poses')
+        if pose is not None:
+            pose = symmetric_orthogonalization(torch.tensor(pose)).numpy()
+            global_orient = pose[:1]
+            body_pose = pose[1:]
+        else:
+            global_orient = None
+            body_pose = None
+        betas = data.get('betas')
+
+        ## Weak perspective
+        scale = data.get('scales')
+        tx = data.get('txs')
+        ty = data.get('tys')
+        ## Full perspective
+        # transl = data.get('transls')
+        # fov = data.get('fovs')
+
+        # from PIL import Image
+        # image = Image.fromarray(image)
+        # image.save(f'aaa_{key}.png')
+        # raise Exception()
+
+        ## Weak perspective
+        if not any(n is None for n in [global_orient, body_pose, betas, scale, tx, ty]):
+
+        ## Full perspective
+        # is_train = False
+        # if not any(n is None for n in [global_orient, body_pose, betas, transl, fov]):
+            # is_train = True
+            with torch.inference_mode():
+                smal_output = smal(
+                    global_orient=torch.tensor(global_orient)[None],
+                    body_pose=torch.tensor(body_pose)[None],
+                    betas=torch.tensor(betas)[None],
+                )
+            vertices = smal_output.vertices.numpy()[0]
+            keypoints_3d = smal_output.joints.numpy()[0]
+
+            ## Weak perspective
+            keypoints_2d = weak_perspective_project(keypoints_3d, scale, tx, ty)
+            vertices_2d = weak_perspective_project(vertices, scale, tx, ty)
+
+            ## Full perspective
+            # keypoints_3d_translated = keypoints_3d + transl
+            # vertices_translated = vertices + transl
+            # keypoints_2d = full_perspective_project(keypoints_3d_translated, fov, image)
+            # vertices_2d = full_perspective_project(vertices_translated, fov, image)
+
+            # import matplotlib.pyplot as plt
+            # im = image
+            # fig, ax = plt.subplots()
+            # ax.imshow(im)
+            # ax.scatter(keypoints_2d[:, 0], keypoints_2d[:, 1], c='red')
+            # ax.scatter(vertices_2d[:, 0], vertices_2d[:, 1], c='blue', alpha=0.5)
+            # fig.savefig(f'aaa_{key}.png')
+            # raise Exception(keypoints_2d)
+
+        # print(keypoints_2d.shape if keypoints_2d is not None else 'no keypoints_2d', keypoints_3d.shape if keypoints_3d is not None else 'no keypoints_3d', vertices_2d.shape if vertices_2d is not None else 'no vertices_2d', vertices.shape if vertices is not None else 'no vertices', image.shape if image is not None else 'no image')
+        # if any is None, print `data`:
+        if any(n is None for n in [keypoints_2d, keypoints_3d, vertices_2d, vertices]):
+            raise Exception(data)
+
+        ## Weak perspective
+        keypoints_2d = np.stack([
+            image.shape[1] / 2 + image.shape[1] * keypoints_2d[:, 0] / 2,
+            image.shape[0] / 2 + image.shape[0] * keypoints_2d[:, 1] / 2,
+            np.ones(keypoints_2d.shape[0]),
+        ], axis=1)
+        vertices_2d = np.stack([
+            image.shape[1] / 2 + image.shape[1] * vertices_2d[:, 0] / 2,
+            image.shape[0] / 2 + image.shape[0] * vertices_2d[:, 1] / 2,
+            np.ones((vertices_2d.shape[0])),
+        ], axis=1)
+
+        ## Full perspective 
+        # if not is_train: # validation data is in normalized coordinates, convert to pixel coordinates
+        #     keypoints_2d[:, :2] = (keypoints_2d[:, :2] + 1) * image.shape[1] / 2
+        #     vertices_2d[:, :2] = (vertices_2d[:, :2] + 1) * image.shape[0] / 2
+        # keypoints_2d = np.concatenate([keypoints_2d, np.ones((keypoints_2d.shape[0], 1))], axis=1)
+        # vertices_2d = np.concatenate([vertices_2d, np.ones((vertices_2d.shape[0], 1))], axis=1)
+
+        # Add confidence channel
+        keypoints_3d = np.concatenate([keypoints_3d, np.ones((keypoints_3d.shape[0], 1))], axis=1)
+        vertices = np.concatenate([vertices, np.ones((vertices.shape[0], 1))], axis=1)
+
+        if random.random() < 0.5:
+            center, scale = get_bbox(vertices_2d)
+            scale /= 200
+        else:
+            center = np.array([image.shape[1]/2, image.shape[0]/2])
+            scale = np.array([image.shape[1]/200, image.shape[0]/200])
+
         center_x = center[0]
         center_y = center[1]
         bbox_size = expand_to_aspect_ratio(scale*200, target_aspect_ratio=BBOX_SHAPE).max()
-        if bbox_size < 1:
-            breakpoint()
 
+        # # set center, scale to fill the image (by width and height)
+        # bbox = np.array([center - 100*scale, center + 100*scale])
+        # # print(center, scale)
+        # # print(bbox)
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots()
+        # ax.imshow(image)
+        # ax.add_patch(plt.Rectangle(bbox[0], bbox[1][0] - bbox[0][0], bbox[1][1] - bbox[0][1], fill=False, edgecolor='red', linewidth=2))
+        # # ax.set_title(f'{center=} {scale=} {bbox_size=}')
+        # fig.savefig(f'aaa_{key}.png')
+        # raise Exception()
 
-        smpl_params = {'global_orient': body_pose[:3],
-                    'body_pose': body_pose[3:],
-                    'betas': betas
-                    }
+        smpl_params = {
+            'global_orient': global_orient,
+            'body_pose': body_pose,
+            'betas': betas,
+        }
+        has_smpl_params = {
+            'global_orient': global_orient is not None,
+            'body_pose': body_pose is not None,
+            'betas': betas is not None,
+        }
 
-        has_smpl_params = {'global_orient': has_body_pose,
-                        'body_pose': has_body_pose,
-                        'betas': has_betas
-                        }
-
-        smpl_params_is_axis_angle = {'global_orient': True,
-                                    'body_pose': True,
-                                    'betas': False
-                                    }
+        # fill in None values with zeros of appropriate shape
+        if smpl_params['global_orient'] is None:
+            smpl_params['global_orient'] = np.zeros(1*9, dtype=np.float32)
+        if smpl_params['body_pose'] is None:
+            smpl_params['body_pose'] = np.zeros(34*9, dtype=np.float32)
+        if smpl_params['betas'] is None:
+            smpl_params['betas'] = np.zeros(145, dtype=np.float32)
 
         augm_config = copy.deepcopy(augm_config)
         # Crop image and (possibly) perform data augmentation
+        mask = np.ones((image.shape[0], image.shape[1]), dtype=np.uint8)
         img_rgba = np.concatenate([image, mask.astype(np.uint8)[:,:,None]*255], axis=2)
-        img_patch_rgba, keypoints_2d, keypoints_3d, smpl_params, has_smpl_params, img_size, trans = get_example(img_rgba,
+        img_patch_rgba, keypoints_2d, keypoints_3d, vertices_2d, vertices, smpl_params, has_smpl_params, img_size, trans = get_example(img_rgba,
                                                                                                     center_x, center_y,
                                                                                                     bbox_size, bbox_size,
                                                                                                     keypoints_2d, keypoints_3d,
+                                                                                                    vertices_2d, vertices,
                                                                                                     smpl_params, has_smpl_params,
                                                                                                     FLIP_KEYPOINT_PERMUTATION,
                                                                                                     IMG_SIZE, IMG_SIZE,
@@ -428,27 +345,43 @@ class ImageDataset(Dataset):
                                                                                                     border_mode=border_mode,
                                                                                                     )
         img_patch = img_patch_rgba[:3,:,:]
-        mask_patch = (img_patch_rgba[3,:,:] / 255.0).clip(0,1)
-        if (mask_patch < 0.5).all():
-            mask_patch = np.ones_like(mask_patch)
+
+        if has_smpl_params['global_orient']:
+            smpl_params['global_orient'] = symmetric_orthogonalization(torch.tensor(smpl_params['global_orient'])).numpy()
+        if has_smpl_params['body_pose']:
+            smpl_params['body_pose'] = symmetric_orthogonalization(torch.tensor(smpl_params['body_pose'])).numpy()
 
         item = {}
-
         item['img'] = img_patch
-        item['mask'] = mask_patch
-        # item['img_og'] = image
-        # item['mask_og'] = mask
         item['keypoints_2d'] = keypoints_2d.astype(np.float32)
         item['keypoints_3d'] = keypoints_3d.astype(np.float32)
-        item['orig_keypoints_2d'] = orig_keypoints_2d
+        item['vertices_2d'] = vertices_2d.astype(np.float32)
+        item['vertices'] = vertices.astype(np.float32)
         item['box_center'] = center.copy()
         item['box_size'] = bbox_size
         item['img_size'] = 1.0 * img_size[::-1].copy()
         item['smpl_params'] = smpl_params
         item['has_smpl_params'] = has_smpl_params
-        item['smpl_params_is_axis_angle'] = smpl_params_is_axis_angle
-        item['_scale'] = scale
-        item['_trans'] = trans
         item['imgname'] = key
-        # item['idx'] = idx
+
+        # import matplotlib.pyplot as plt
+        # fig, ax = plt.subplots(1, 1)
+        # ax = [ax]
+        # ax[0].imshow(img_patch_rgba[:, :, :3])
+        # ax[0].scatter(img_patch.shape[1]/2 + img_patch.shape[1]*vertices_2d[:, 0], img_patch.shape[0]/2 + img_patch.shape[0]*vertices_2d[:, 1], c='blue', alpha=0.5)
+        # ax[0].scatter(img_patch.shape[1]/2 + img_patch.shape[1]*keypoints_2d[:, 0], img_patch.shape[0]/2 + img_patch.shape[0]*keypoints_2d[:, 1], c='red')
+        
+        # # reproject vertices:
+        # with torch.inference_mode():
+        #     smal_output = smal(
+        #         global_orient=torch.tensor(item['smpl_params']['global_orient'])[None],
+        #         body_pose=torch.tensor(item['smpl_params']['body_pose'])[None],
+        #         betas=torch.tensor(item['smpl_params']['betas'])[None],
+        #     )
+        # # vertices_2d_reproj = weak_perspective_project(smal_output.vertices.numpy()[0], item['box_center'], item['box_center'][0], item['box_center'][1])
+        # # ax[1].scatter(img_patch.shape[1]/2 + img_patch.shape[1]*vertices_2d_reproj[:, 0], img_patch.shape[0]/2 + img_patch.shape[0]*vertices_2d_reproj[:, 1], c='blue', alpha=0.5)
+        # # ax[1].invert_yaxis()
+        # # ax[1].set_aspect('equal')
+        # fig.savefig(f'aaa_{key}.png')
+        # raise Exception()
         return item

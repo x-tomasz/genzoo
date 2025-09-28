@@ -9,7 +9,7 @@ class Discriminator(nn.Module):
         """
         super(Discriminator, self).__init__()
 
-        self.num_joints = 23
+        self.num_joints = 34  # 23  (changed for SMAL)
         # poses_alone
         self.D_conv1 = nn.Conv2d(9, 32, kernel_size=1)
         nn.init.xavier_uniform_(self.D_conv1.weight)

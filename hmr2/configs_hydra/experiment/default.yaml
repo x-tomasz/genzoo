@@ -1,29 +1,38 @@
 # @package _global_
 
 SMPL:
-  DATA_DIR: ${oc.env:HOME}/.cache/4DHumans/data/
-  MODEL_PATH: ${SMPL.DATA_DIR}/smpl
-  GENDER: neutral
-  NUM_BODY_JOINTS: 23
-  JOINT_REGRESSOR_EXTRA: ${SMPL.DATA_DIR}/SMPL_to_J19.pkl
-  MEAN_PARAMS: ${SMPL.DATA_DIR}/smpl_mean_params.npz
+    DATA_DIR: ${oc.env:HOME}/.cache/4DHumans/data/
+    # MODEL_PATH: ${SMPL.DATA_DIR}/smpl
+    MODEL_PATH: ./data/smal_plus.pkl
+    # GENDER: neutral
+    NUM_BODY_JOINTS: 34
+    # JOINT_REGRESSOR_EXTRA: ${SMPL.DATA_DIR}/SMPL_to_J19.pkl
+    # MEAN_PARAMS: /home/mambauser/.cache/4DHumans/data/smpl_mean_params.npz
+    NUM_BETAS: 145
 
 EXTRA:
-  FOCAL_LENGTH: 5000
-  NUM_LOG_IMAGES: 4
-  NUM_LOG_SAMPLES_PER_IMAGE: 8
-  PELVIS_IND: 39
+    FOCAL_LENGTH: 5000
+    NUM_LOG_IMAGES: 4
+    NUM_LOG_SAMPLES_PER_IMAGE: 8
+    PELVIS_IND: 39
 
 DATASETS:
-  BETAS_REG: True
-  CONFIG:
-    SCALE_FACTOR: 0.3
-    ROT_FACTOR: 30
-    TRANS_FACTOR: 0.02
-    COLOR_SCALE: 0.2
-    ROT_AUG_RATE: 0.6
-    TRANS_AUG_RATE: 0.5
-    DO_FLIP: True
-    FLIP_AUG_RATE: 0.5
-    EXTREME_CROP_AUG_RATE: 0.10
-    EXTREME_CROP_AUG_LEVEL: 1
+    # BETAS_REG: True
+    CONFIG:
+        SCALE_FACTOR: 0.3
+        ROT_FACTOR: 30
+        TRANS_FACTOR: 0.02
+        COLOR_SCALE: 0.2
+        ROT_AUG_RATE: 0.6
+        TRANS_AUG_RATE: 0.5
+        DO_FLIP: False
+        FLIP_AUG_RATE: 0.5
+        EXTREME_CROP_AUG_RATE: 0.10
+        EXTREME_CROP_AUG_LEVEL: 1
+        # Occlusion augmentation settings
+        OCCLUSION_AUG_RATE: 0.1
+        OCCLUSION_CONFIG:
+            MIN_PX: 100
+            SCALE: 0.8
+            FRACTION: [0.6, 0.9]
+            VOC_ROOT: "/tmp/VOC"
