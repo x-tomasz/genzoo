@@ -39,11 +39,13 @@ You acknowledge that the Data & Software is a valuable scientific resource and a
 
 Citation:
 ```bibtex
-@inproceedings{niewiadomski2025ICCV,
-  author    = {Niewiadomski, Tomasz and Yiannakidis, Anastasios and Cuevas-Velasquez, Hanz and Sanyal, Soubhik and Black, Michael J. and Zuffi, Silvia and Kulits, Peter},
-  title     = {Generative Zoo},
-  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
-  year      = {2025}
+@InProceedings{Niewiadomski_2025_ICCV,
+    author    = {Niewiadomski, Tomasz and Yiannakidis, Anastasios and Cuevas-Velasquez, Hanz and Sanyal, Soubhik and Black, Michael J. and Zuffi, Silvia and Kulits, Peter},
+    title     = {Generative Zoo},
+    booktitle = {ICCV},
+    month     = {October},
+    year      = {2025},
+    pages     = {8492-8502}
 }
 ```
 
@@ -55,15 +57,27 @@ For commercial use of the Data & Software, please send emails to ps-license@tue.
 This Agreement shall be governed by the laws of the Federal Republic of Germany except for the UN Sales Convention.
 
 --------------------------------------------------------------------------------
-```
-                              The MIT License (MIT)
 
-Copyright © 2025 Max-Planck-Gesellschaft zur Förderung der Wissenschaften e.V. (MPI)
+We build off the https://github.com/shubham-goel/4D-Humans codebase to perform our experiments. As such, inherited code falls under their original MIT license. Additions and modifications are released under a different license in accordance with institute requirements which has been included above. The license of the inherited code is as follows:
 
+MIT License
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Copyright (c) 2023 UC Regents, Shubham Goel
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-```
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
