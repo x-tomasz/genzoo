@@ -1,4 +1,4 @@
-# Specific
+Specific
 /logs*/
 /results/
 /sandbox/
@@ -145,4 +145,3 @@ dmypy.json
 # Pyre type checker
 .pyre/
 /checkpoints/
-/data/

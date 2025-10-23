@@ -1,0 +1,124 @@
+task_name: train
+tags:
+- dev
+train: true
+test: false
+ckpt_path: null
+seed: null
+DATASETS:
+  SUPPRESS_KP_CONF_THRESH: 0.3
+  FILTER_NUM_KP: 4
+  FILTER_NUM_KP_THRESH: 0.0
+  FILTER_REPROJ_THRESH: 31000
+  SUPPRESS_BETAS_THRESH: 0
+  SUPPRESS_BAD_POSES: false
+  POSES_BETAS_SIMULTANEOUS: true
+  FILTER_NO_POSES: false
+  TRAIN:
+    COCO-TRAIN-2014-WMASK-PRUNED:
+      WEIGHT: 1.0
+  VAL:
+    COCO-VAL:
+      WEIGHT: 1.0
+  MOCAP: CMU-MOCAP
+  CONFIG:
+    SCALE_FACTOR: 0.3
+    ROT_FACTOR: 30
+    TRANS_FACTOR: 0.02
+    COLOR_SCALE: 0.2
+    ROT_AUG_RATE: 0.6
+    TRANS_AUG_RATE: 0.5
+    DO_FLIP: false
+    FLIP_AUG_RATE: 0.5
+    EXTREME_CROP_AUG_RATE: 0.1
+    EXTREME_CROP_AUG_LEVEL: 1
+    OCCLUSION_AUG_RATE: 0.1
+    OCCLUSION_CONFIG:
+      MIN_PX: 100
+      SCALE: 0.8
+      FRACTION:
+      - 0.6
+      - 0.9
+      VOC_ROOT: ./data/VOCdevkit/VOC2012
+    OCCLUSION_VOC_ROOT: ./data/VOCdevkit/VOC2012
+trainer:
+  _target_: pytorch_lightning.Trainer
+  default_root_dir: ${paths.output_dir}
+  accelerator: gpu
+  devices: 1
+  deterministic: false
+  num_sanity_val_steps: 0
+  log_every_n_steps: ${GENERAL.LOG_STEPS}
+  val_check_interval: ${GENERAL.VAL_STEPS}
+  precision: 16-mixed
+  max_steps: ${GENERAL.TOTAL_STEPS}
+  limit_val_batches: 1
+paths:
+  root_dir: ${oc.env:PROJECT_ROOT}
+  data_dir: ${paths.root_dir}/hmr2/
+  log_dir: logs/
+  output_dir: ${hydra:runtime.output_dir}
+  work_dir: ${hydra:runtime.cwd}
+extras:
+  ignore_warnings: false
+  enforce_tags: true
+  print_config: true
+exp_name: genzoo_1M
+SMPL:
+  DATA_DIR: ${oc.env:HOME}/.cache/4DHumans/data/
+  MODEL_PATH: ./data/smal_plus.pkl
+  # GENDER: neutral
+  NUM_BODY_JOINTS: 34
+  # JOINT_REGRESSOR_EXTRA: ${SMPL.DATA_DIR}/SMPL_to_J19.pkl
+  # MEAN_PARAMS: /home/mambauser/.cache/4DHumans/data/smpl_mean_params.npz
+  NUM_BETAS: 145
+EXTRA:
+  FOCAL_LENGTH: 5000
+  NUM_LOG_IMAGES: 4
+  NUM_LOG_SAMPLES_PER_IMAGE: 8
+  PELVIS_IND: 39
+GENERAL:
+  TOTAL_STEPS: 1000000
+  LOG_STEPS: 1000
+  VAL_STEPS: 1000
+  CHECKPOINT_STEPS: 10000
+  CHECKPOINT_SAVE_TOP_K: 1
+  NUM_WORKERS: 15
+  PREFETCH_FACTOR: 2
+TRAIN:
+  LR: 1.0e-05
+  WEIGHT_DECAY: 0.0001
+  BATCH_SIZE: 128
+  LOSS_REDUCTION: mean
+MODEL:
+  IMAGE_SIZE: 256
+  IMAGE_MEAN:
+  - 0.485
+  - 0.456
+  - 0.406
+  IMAGE_STD:
+  - 0.229
+  - 0.224
+  - 0.225
+  BACKBONE:
+    TYPE: vit
+    PRETRAINED_WEIGHTS: ./data/vitpose_backbone.pth
+  SMPL_HEAD:
+    TYPE: transformer_decoder
+    IN_CHANNELS: 2048
+    TRANSFORMER_DECODER:
+      depth: 6
+      heads: 8
+      mlp_dim: 1024
+      dim_head: 64
+      dropout: 0.0
+      emb_dropout: 0.0
+      norm: layer
+      context_dim: 1280
+LOSS_WEIGHTS:
+  KEYPOINTS_3D: 0.05
+  KEYPOINTS_2D: 0.01
+  GLOBAL_ORIENT: 100
+  BODY_POSE: 100
+  BETAS: 50
+  ADVERSARIAL: 0
